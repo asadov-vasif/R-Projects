@@ -1,0 +1,398 @@
+---
+editor_options: 
+  markdown: 
+    wrap: 72
+---
+
+```{r}
+
+library(tidyverse)
+library(nycflights13)
+library(DT)
+```
+
+Import the datasets in the nycflights13 database:
+
+```{r}
+
+flights <- nycflights13::flights
+airlines <- nycflights13::airlines
+airports <- nycflights13::airports
+planes <- nycflights13::planes
+weather <- nycflights13::weather
+```
+
+21. Compute on-time performance (%) for each airline (flights arriving
+    ≤15 min late). Rank carriers and show a horizontal bar chart with
+    percentages
+
+```{r}
+
+flights %>% 
+  inner_join(airlines, by = 'carrier') %>% 
+  group_by(name) %>% 
+  summarise(
+    on_time_flights = sum(arr_delay<=15, na.rm = TRUE),
+    total_count = n(),
+    .groups = 'drop'
+  ) %>% 
+  
+  mutate(
+    perc_of_ontime_flights = round(on_time_flights/total_count, 2) * 100
+  ) %>% 
+  
+  mutate(
+    rank = dense_rank(desc(perc_of_ontime_flights))
+  ) %>% 
+  
+ 
+  ggplot(aes(y = reorder(name, perc_of_ontime_flights), x = perc_of_ontime_flights)) + 
+  geom_bar(stat = 'identity', color = 'blue', fill = 'skyblue') + 
+  geom_text(aes(label = perc_of_ontime_flights), hjust = -0.5, color = 'skyblue') + 
+  theme_classic()
+  
+```
+
+22. Which days of the week see the worst delays? Summarize average
+    dep_delay by weekday and visualize with a bar chart ordered Mon–Sun.
+
+```{r}
+flights  %>% 
+  select(
+    time_hour ,dep_delay
+  ) %>% 
+  
+  mutate(
+    weekday = wday(time_hour)
+  ) %>% 
+  
+  group_by(weekday) %>% 
+  
+  summarise(
+    avg_dep_delay = mean(dep_delay, na.rm = T)
+  ) %>% 
+  
+  ggplot(
+    aes(y = avg_dep_delay, x = weekday) 
+  ) +
+  
+  geom_bar(
+    stat = 'identity',
+    color = 'blue',
+    fill = 'skyblue', 
+    width = 0.7
+  ) +
+  
+  geom_text(
+    aes(label = round(avg_dep_delay,2)), hjust = -0.7,
+    color = 'blue'
+  ) + 
+  coord_flip() +
+
+  theme_gray()
+```
+
+23. Do larger planes (by seats) carry proportionally more flights? Join
+    flights
+
+-   planes, group by seat category (e.g., small \<150, medium 150–250,
+    large \>250), and plot bar chart of total flights
+
+```{r}
+
+flights %>% 
+  inner_join(planes, by = 'tailnum') %>% 
+  select(origin, dest, flight, tailnum, seats) %>% 
+  mutate( seat_category = case_when(
+      seats < 150 ~ 'small',
+      seats %in% 150:250 ~ 'medium',
+      seats > 250 ~ 'large' )
+      ) %>% 
+  
+  group_by(seat_category) %>% 
+  
+  summarise(
+    total_flights = n(),
+    .groups = 'drop'
+  ) %>% 
+  
+  ggplot(
+    aes(x = seat_category, y = total_flights, fill = seat_category)
+  ) + 
+  
+  geom_bar(stat = 'identity') +
+  
+  theme_minimal()
+```
+
+24. Compare average distance flown for different engine types (from
+    planes). Visualize as boxplots to show distribution spread.
+
+```{r}
+
+flights %>% 
+  inner_join(planes, by = 'tailnum') %>% 
+  select(flight, tailnum, engine, distance) %>% 
+  group_by(engine) %>% 
+  slice_sample(prop = 0.5) %>% 
+  
+  filter(!is.na(engine)) %>% 
+  
+  ggplot(
+    aes(x = engine, y = distance, fill = engine)
+  ) + 
+  
+  geom_boxplot(
+    outlier.colour = 'red', outlier.size = 2, alpha = 0.5
+  ) +
+  
+  theme_minimal()
+
+
+```
+
+25. Which manufacturers’ planes (Boeing, Airbus, Embraer, etc.) tend to
+    have longer air_time relative to distance (efficiency)? Create a
+    scatterplot of distance vs. air_time colored by manufacturer.
+
+```{r}
+
+flights %>% 
+  inner_join(planes, by = 'tailnum') %>% 
+  select(flight, tailnum, manufacturer, air_time, distance) %>% 
+  group_by(manufacturer) %>% 
+  
+  filter(!is.na(distance), !is.na(air_time)) %>% 
+  
+  slice_sample(prop = 0.1) %>% 
+  
+  ggplot(
+    aes(x = air_time, y = distance, color = manufacturer)
+  ) + 
+  geom_point(alpha = 0.7) +
+  
+  theme_minimal()
+
+```
+
+26. Use weather and flights : aggregate number of flights per month vs.
+    avg temperature at origin airports. Show with a dual-axis line chart
+    (flights vs. temp).
+
+```{r}
+# for dual axis we need scale factor
+
+monthly_stats <- flights %>% 
+  inner_join(weather, by = c('origin', 'year', 'month', 'day', 'hour')) %>% 
+  select(year, month, flight, origin, temp) %>% 
+  filter(!is.na(flight), !is.na(temp), !is.na(origin)) %>% 
+  group_by(month) %>%
+  
+  summarise(
+      num_of_flights = n(),
+      avg_temp = mean(temp, na.rm = T)
+  )
+
+
+scale_factor = max(monthly_stats$num_of_flights) / max(monthly_stats$avg_temp)
+  
+  
+monthly_stats %>% 
+  
+  ggplot(
+    aes(x = month)
+  ) +
+  
+  geom_line(
+    aes(y = num_of_flights), color = 'steelblue', linewidth = 1.2
+  ) + 
+  
+  geom_line(
+    aes(y = avg_temp * scale_factor), color = 'red', linewidth = 1.1
+  ) +
+  
+  scale_y_continuous(
+    name = 'Number of flights',
+    
+    sec.axis = sec_axis(~./scale_factor, name = 'Average Temperature')
+  ) +
+  
+  scale_x_continuous(
+    breaks = 1:12,
+    labels = month.abb
+  ) + 
+  
+  theme_minimal()
+
+```
+
+27. For each aircraft, compute its age in 2013 (2013 - year) and total
+    flights it made. Visualize with a scatterplot (age vs. number of
+    flights)
+
+```{r}
+
+flights %>% 
+  inner_join(planes, by = 'tailnum') %>%
+  select(tailnum, flight, year.y) %>%
+  
+  mutate(
+    plane_age = 2013 - year.y
+  ) %>% 
+  
+  group_by(tailnum) %>% 
+  
+  summarise(
+    num_of_flights = n(), 
+    plane_age = mean(plane_age)
+  ) %>% 
+  
+  filter(!is.na(num_of_flights), !is.na(plane_age)) %>% 
+  
+  
+  ggplot(
+    aes(x = plane_age, y = num_of_flights)
+  ) + 
+  
+  geom_point(alpha = 0.6, color = 'steelblue') +
+  
+  theme_gray()
+
+
+```
+
+28. Do heavier planes (more seats) fly more consistently in bad weather?
+
+```{r}
+
+flights %>% 
+  inner_join(planes, by = 'tailnum') %>% 
+  inner_join(weather, by = c('origin', 'year.x' = 'year', 'month', 'day', 'hour')) %>% 
+
+  mutate(
+    seat_category = case_when(
+      seats < 150 ~ 'small',
+      seats %in% 150:250 ~ 'medium', 
+      seats > 250 ~ 'large' )
+  ) %>% 
+  
+  group_by(seat_category) %>% 
+  
+  ggplot(
+    aes(x = seat_category, y = visib)
+  ) + 
+  
+  geom_boxplot(outlier.color = 'red', outlier.size = 2) +
+  
+  theme_minimal()
+
+
+
+```
+
+29. For each airline, show the proportion of flights by aircraft
+    manufacturer (Boeing, Airbus, etc.) using a faceted bar chart (one
+    facet per airline)
+
+```{r}
+
+flights %>% 
+  inner_join(airlines, by = 'carrier') %>% 
+  inner_join(planes, by = 'tailnum') %>% 
+  select(flight, tailnum, manufacturer, name) %>% 
+  
+  group_by(name, manufacturer) %>%
+  
+  summarise(
+    num_flights = n(), 
+    .groups = 'drop'
+  ) %>% 
+  
+
+  group_by(name) %>% 
+  
+  mutate(
+    perc_of_total = round(num_flights/sum(num_flights) * 100,2)
+  ) %>%
+  
+  ggplot(
+    aes(x = manufacturer, y = perc_of_total, fill = manufacturer)
+  ) + 
+  
+  geom_bar(stat = 'identity', width = 0.8) +
+  
+  facet_wrap(~ name) +
+  
+  theme_minimal()
+
+```
+
+30. Which airports handle the longest average flight distances and
+ how does this relate to their average arrival delay
+
+
+```{r}
+
+flights %>% 
+  inner_join(airports, by = c('dest' = 'faa'))  %>% 
+  select(dest, flight, distance, arr_delay) %>% 
+  
+  group_by(dest) %>% 
+  
+  summarise(
+    avg_distance = mean(distance, na.rm = T),
+    avg_arr_delay = mean(arr_delay, na.rm = T)
+  ) %>% 
+
+  filter(!is.na(avg_distance), !is.na(avg_arr_delay)) %>% 
+  
+  ggplot(
+    aes(x = avg_distance, y = avg_arr_delay)
+  ) + 
+  
+  geom_line(
+     color = 'red', linewidth = 1
+  ) + 
+  
+  labs(
+    title = 'Average distance vs average arrive delay', 
+    x = 'Average distance', 
+    y = 'Average arrive delay'
+  ) + 
+  
+  theme_minimal()
+  
+
+
+```
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
