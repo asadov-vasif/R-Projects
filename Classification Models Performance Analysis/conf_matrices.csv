@@ -1,0 +1,14 @@
+Model,True_Positive,True_Negative,False_Positive,False_Negative
+LogisticRegression,114,30,30,26
+NaiveBayes,36,53,7,104
+KNN,120,21,39,20
+DecisionTree,102,29,31,38
+RandomForest,124,26,34,16
+SVM_Linear,113,32,28,27
+SVM_RBF,126,27,33,14
+Bagging_SVM,124,27,33,16
+ExtraTree,108,26,34,32
+AdaBoost,111,30,30,29
+XGBoost,122,30,30,18
+LightGBM,120,31,29,20
+CatBoost,125,30,30,15
