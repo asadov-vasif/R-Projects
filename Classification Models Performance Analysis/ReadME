@@ -1,0 +1,27 @@
+1. German credit data is imported into the RStudio
+2. The data is cleaned, scaled and encoded in R.
+3. Processed & cleaned data is exported as csv in R.
+4. Processed csv data is imported in Python (Kaggle notebook).
+5. All Machine Learning Classification models are built for classification on the data.
+6. Metrics, confusion matrices are stored as csv files for each model.
+7. Model performance and speed is checked for different learning rates and number of estimators, then stored in the corresponding csv files.
+8. The best model is selected and tuning methods is applied on it. The results for different tuning methods are stored in the csv file.
+9. `metrics.csv`, `conf_matrices.csv`, `perf_by_lr.csv`, `perf_by_nestimators.csv`, `tuning_methods.csv` are created and exported in Python.
+10. Resulted csv files are imported in RStudio.
+11. Shiny Interactive Dashboard is built using the resulted csv files.
+
+You can see the dashboard on the link: https://vasif-analytics.shinyapps.io/Analysis-Dashboard/
+
+
+
+
+
+
+
+
+
+
+
+
+
+
