@@ -1,0 +1,360 @@
+---
+title: "R Notebook"
+output:
+  html_document:
+    df_print: paged
+---
+
+Import libraries. 
+
+```{r libraries, message=FALSE, warning=FALSE}
+library(tidyverse) 
+library(data.table)
+library(rstudioapi)
+library(skimr)
+library(inspectdf)
+library(mice)
+library(plotly)
+library(highcharter)
+library(recipes) #normalization, imputation, and categorical encoding
+library(caret) #evaluating ml models
+library(graphics) 
+library(Hmisc) #summary statistics, imputation, and advanced plotting functions
+library(glue)
+library(naniar)
+library(gt)
+library(h2o)
+library(DT)
+library(knitr)
+library(broom)
+library(faraway)
+```
+
+
+## Import and investigate the data
+
+Read the data. 
+```{r}
+
+df <- read.csv('crimes.csv')
+
+head(df)
+```
+ 
+ Investigate the column names and make sure they are clean.
+
+```{r}
+colnames(df)
+```
+
+## Data Preprocessing
+
+### 1. Check NA values
+
+```{r}
+df %>% inspect_na() %>% filter(pcnt > 30) %>% pull(col_name)
+
+```
+According to the results, we can tell that there is not any missing value in the dataset.
+
+```{r}
+df.chr <- df %>% select_if(is.numeric)
+df.chr %>% colnames()
+```
+
+
+### 2. Multicollinearity
+
+```{r}
+target <- 'ViolentCrimesPerPop'
+features <- df %>% select(-all_of(target)) %>% names()
+features
+```
+
+Generate the formula for the `features ~ target` and put it inside the glm (generalized linear model) model. ~ tilda sign means 'is modeled as a function of ...'; so, in the formula we are telling that the target is a function of features and is in the form of
+`target ~ feature1 + feature2 + feature3+...`
+
+```{r}
+f <- as.formula(paste(target, paste(features, collapse = ' + '), sep = ' ~ '))
+glm <- glm(f, data = df)
+tidy(glm) %>% arrange(p.value)
+```
+
+```{r}
+perfect_collinear_rows <- attributes(alias(glm)$Complete)$dimnames[[1]]
+```
+`alias(glm)` - examines linear dependencies among the columns of your model matrix (the predictors). it tells you whether any predictors are perfectly collinear — meaning one can be expressed as a linear combination of others. `alias(glm)` returns a list with two elements: \$Complete - a matrix showing complete aliasing (perfect collinearity) and \$Partial - a matrix showing partial aliasing. \$Complete is the matrix of fully collinear relationships. If it’s empty, there are no exact dependencies among predictors. If it’s non-empty, its rows and columns correspond to variables involved in those dependencies.
+
+`attributes(alias(glm)$Complete)` - this command retrieves the metadata of the matrix.
+For matrices, attributes usually returns: dimension (dim), names of rows and columns (dimnames) and class. In our case we asked to retrieve `dimnames[[1]]` which corresponds to rows.
+
+```{r}
+features <- features[!features %in% perfect_collinear_rows]
+```
+
+
+### 3. Variance Inflation Factor VIF 
+
+```{r}
+while (glm %>% vif() %>% sort(decreasing = T) %>% .[1] >= 1.5) {
+  features_after_removal <- glm %>% vif() %>% sort(decreasing = T) %>% .[-1] %>%  names()
+  f <- as.formula(paste(target, paste(features_after_removal, collapse = '+'), sep = '~'))
+  glm <- glm(f, data = df)
+}
+```
+
+Steps in VIF loop:
+`glm %>% vif() %>% sort(decreasing = T) %>% .[1] >= 1.5` - vif finds vif score from the glm and sort the features in the decreasing order of the vif score. `.[1]` sign will take the first row which has the highest vif score. `>=1.5` is a condition and will return True if there is a feature in the df that has vif score more than 1.5 (in real world, it is too small for being called as multicollinear. mainly `>=5` is used for representing high multicollinearity. But for educational purpose, it is taken as 1.5). The first feature which has higher vif score than the given condition will be removed from the features list with the `glm %>% vif() %>% sort(decreasing = T) %>% .[-1]` code; and the loop will start again to remove features until there is not any feature with higher vif score ieft. After completing the loop, run the following code to obtain the remaining features.
+
+```{r}
+features <- glm %>% vif() %>% sort(decreasing = T) %>% names()
+df <- df %>% select(target, all_of(features))
+```
+
+```{r}
+df %>% head()
+```
+
+
+### 4. Scale the numerical variables
+
+```{r}
+df[,-1] <- df[,-1] %>% scale() %>% as.data.frame()
+```
+
+```{r}
+df
+```
+
+
+## Modelling
+
+### Train-test split
+
+Firstly, convert the dataframe into the h2o structure.
+
+```{r}
+h2o.init()
+h2o_data <- df %>% as.h2o()
+```
+
+Split the data into train and test data.
+
+```{r}
+h2o_data <- df %>% as.h2o()
+h2o_data <- h2o_data %>% h2o.splitFrame(ratios = 0.8, seed = 123)
+train <- h2o_data[[1]]
+test <- h2o_data[[2]]
+```
+
+Define the target and features. 
+
+```{r}
+target <- target
+features <- df %>% select(-target) %>% names()
+```
+
+Fit the h2o model.
+
+```{r}
+model <- h2o.glm(
+  x = features, y = target,
+  training_frame = train,
+  validation_frame = test,
+  nfolds = 10, seed = 123,
+  lambda = 0, compute_p_values = T
+)
+```
+
+Show the coefficients.
+
+```{r}
+model@model$coefficients_table %>% 
+  as.data.frame() %>% 
+  select(names, p_value) %>% 
+  mutate(p_value = round(p_value,3)) %>% 
+  .[-1,] %>% 
+  arrange(desc(p_value))
+```
+
+### Feature importance
+
+Some features have p-value more than 0.05; it means they are not significant in prediction. Therefore, we can drop these features and refit the model again, to keep only informative, significant features for better prediction. 
+
+```{r}
+while (model@model$coefficients_table %>% 
+       as.data.frame() %>% 
+       select(names, p_value) %>% 
+       mutate(p_value = round(p_value,3)) %>% 
+       .[-1,] %>% 
+       arrange(desc(p_value)) %>% 
+       .[1,2] > 0.05) {
+  
+  model@model$coefficients_table %>% 
+       as.data.frame() %>% 
+       select(names, p_value) %>% 
+       mutate(p_value = round(p_value,3)) %>% 
+    filter(!is.nan(p_value)) %>% 
+    .[-1,] %>% 
+    arrange(desc(p_value)) %>% 
+    .[1,1] -> v
+  features <- features[features!=v]
+  
+  train_h2o <- train %>% as.data.frame() %>% select(target,features) %>% as.h2o()
+  test_h2o <- test %>% as.data.frame() %>% select(target, features) %>% as.h2o()
+  
+  model <- h2o.glm(
+    x = features, y = target,
+    training_frame = train,
+    validation_frame = test,
+    nfolds = 10, seed = 123,
+    lambda = 0, compute_p_values = T
+  )
+} 
+
+```
+What we did in the last step is we put the condition inside the while loop which will retrieve the insignificant predictors (features with more than 0.05 p value) and remove them one by one. when there is not any insignificant, unuseful predictor left, the loop will end and we will get the model results with the significant predictors.
+
+After removing the insignificant predictors, let's predict the results.
+
+```{r}
+y_pred <- model %>% h2o.predict(newdata = test) %>% as.data.frame()
+```
+
+### Model Evaluation 
+
+Find the difference between actual values and predicted values. It is called residuals.
+```{r}
+test_set <- test %>% as.data.frame() 
+residuals <- test_set$ViolentCrimesPerPop - y_pred$predict
+```
+
+
+Root Mean Squared Error (RMSE):
+```{r}
+RMSE <- sqrt(mean(residuals^2))
+```
+
+R2 score:
+```{r}
+y_test_mean <- mean(test_set$ViolentCrimesPerPop)
+
+tss <- sum((test_set$ViolentCrimesPerPop - y_test_mean)^2) # total sum of squares
+rss <- sum(residuals^2) # residual sum of squares
+R2 <- 1 - (rss/tss)
+R2
+```
+
+Adjusted R2 score:
+```{r}
+n <- test_set %>% nrow() # sample size
+k <- features %>% length() # number of features
+
+Adjusted_R2 <- 1 - (1-R2) * ((n-1) / (n-k-1))
+```
+
+Build dataframe from the metrics:
+```{r}
+results <- tibble(
+  RMSE = round(RMSE,1),
+  R2, Adjusted_R2
+)
+results
+```
+
+
+Visualize the results: 
+```{r}
+# Plotting actual & predicted ----
+my_data <- cbind(predicted = y_pred$predict,
+                 observed = test_set$ViolentCrimesPerPop) %>% 
+  as.data.frame()
+```
+
+
+```{r}
+g <- my_data %>% 
+  ggplot(aes(x = predicted, y = observed)) + 
+  geom_point(color = "darkred") + 
+  geom_smooth(method=lm) + 
+  labs(x="Predicted Power Output", 
+       y="Observed Power Output",
+       title=glue('Test: Adjusted R2 = {round(enexpr(Adjusted_R2),2)}')) +
+  theme(plot.title = element_text(color="darkgreen",size=16,hjust=0.5),
+        axis.text.y = element_text(size=12), 
+        axis.text.x = element_text(size=12),
+        axis.title.x = element_text(size=14), 
+        axis.title.y = element_text(size=14))
+
+g 
+g %>% ggplotly()
+```
+
+## Check Overfitting
+
+```{r}
+y_pred_train <- model %>% h2o.predict(newdata = train) %>% as.data.frame()
+```
+
+
+```{r}
+train_set <- train %>% as.data.frame()
+residuals = train_set$ViolentCrimesPerPop - y_pred_train$predict
+
+RMSE_train = sqrt(mean(residuals^2))
+y_train_mean = mean(train_set$ViolentCrimesPerPop)
+
+tss = sum((train_set$ViolentCrimesPerPop - y_train_mean)^2)
+rss = sum(residuals^2)
+
+R2_train = 1 - (rss/tss); R2_train
+
+n <- train_set %>% nrow() #sample size
+k <- features %>% length() #number of independent variables
+Adjusted_R2_train = 1-(1-R2_train)*((n-1)/(n-k-1))
+```
+
+
+```{r}
+my_data_train <- cbind(predicted = y_pred_train$predict,
+                       observed = train_set$ViolentCrimesPerPop) %>% 
+  as.data.frame()
+```
+
+
+```{r}
+g_train <- my_data_train %>% 
+  ggplot(aes(predicted, observed)) + 
+  geom_point(color = "darkred") + 
+  geom_smooth(method=lm) + 
+  labs(x="Predecited Power Output", 
+       y="Observed Power Output",
+       title=glue('Train: Adjusted R2 = {round(enexpr(Adjusted_R2_train),2)}')) +
+  theme(plot.title = element_text(color="darkgreen",size=16,hjust=0.5),
+        axis.text.y = element_text(size=12), 
+        axis.text.x = element_text(size=12),
+        axis.title.x = element_text(size=14), 
+        axis.title.y = element_text(size=14))
+features
+
+g_train %>% ggplotly()
+```
+
+Comparison of test graph and train grapg
+```{r}
+# Compare 
+library(patchwork)
+g_train + g
+```
+
+
+```{r}
+tibble(RMSE_train = round(RMSE_train,1),
+       RMSE_test = round(RMSE,1),
+       
+       Adjusted_R2_train,
+       Adjusted_R2_test = Adjusted_R2)
+```
+
+
+
